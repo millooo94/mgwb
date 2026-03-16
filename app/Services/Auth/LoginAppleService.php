@@ -2,30 +2,25 @@
 
 namespace App\Services\Auth;
 
-use App\Exceptions\LoginAppleException;
+use App\Exceptions\LoginFacebookException;
 use App\Models\Utente;
+use Illuminate\Support\Facades\Http;
 
-class LoginAppleService
+class LoginFacebookService
 {
     public function __construct(
         protected AuthUserPayloadService $authUserPayloadService,
         protected AccessTokenService $accessTokenService,
-        protected AppleIdentityService $appleIdentityService,
         protected ResolveSocialIdentityService $resolveSocialIdentityService
     ) {}
 
     public function login(array $data): array
     {
-        $this->appleIdentityService->validateAuthorizationCode($data['authorization_code']);
+        $profile = $this->fetchFacebookProfile($data['access_token']);
 
-        $claims = $this->appleIdentityService->verifyIdentityToken(
-            $data['identity_token'],
-            $data['nonce'] ?? null
-        );
+        $user = $this->resolveOrCreateUser($profile);
 
-        $user = $this->resolveOrCreateUser($claims, $data);
-
-        $this->ensureAppleLoginIsAllowed($user);
+        $this->ensureFacebookLoginIsAllowed($user);
 
         $token = $this->accessTokenService->create(
             user: $user,
@@ -40,77 +35,149 @@ class LoginAppleService
         );
     }
 
-    protected function resolveOrCreateUser(array $claims, array $data): Utente
+    protected function fetchFacebookProfile(string $accessToken): array
     {
-        $appleSub = (string) ($claims['sub'] ?? '');
+        $this->debugAccessToken($accessToken);
 
-        if ($appleSub === '') {
-            throw new LoginAppleException(
-                message: 'Identificativo Apple non valido.',
+        $response = Http::timeout(10)
+            ->get('https://graph.facebook.com/me', [
+                'fields' => 'id,name,email',
+                'access_token' => $accessToken,
+            ]);
+
+        if (! $response->successful()) {
+            throw new LoginFacebookException(
+                message: 'Unable to fetch Facebook profile.',
                 errors: [
-                    'identity_token' => ['Identificativo Apple non valido.'],
+                    'access_token' => ['Unable to fetch Facebook profile.'],
                 ],
                 status: 422
             );
         }
 
-        $email = $this->resolveEmail($claims);
+        $profile = $response->json();
 
-        if ($email === null) {
-            throw new LoginAppleException(
-                message: 'Email Apple non disponibile per la creazione dell’account. Revoca l’autorizzazione Apple e riprova.',
+        if (empty($profile['id'])) {
+            throw new LoginFacebookException(
+                message: 'Invalid Facebook profile.',
                 errors: [
-                    'email' => ['Email Apple non disponibile per la creazione dell’account. Revoca l’autorizzazione Apple e riprova.'],
+                    'access_token' => ['Invalid Facebook profile.'],
                 ],
                 status: 422
             );
         }
 
-        [$nome, $cognome] = $this->extractNames($data, $email);
+        if (empty($profile['email'])) {
+            throw new LoginFacebookException(
+                message: 'Facebook email is not available. Make sure you requested the email permission.',
+                errors: [
+                    'email' => ['Facebook email is not available. Make sure you requested the email permission.'],
+                ],
+                status: 422
+            );
+        }
+
+        return $profile;
+    }
+
+    protected function debugAccessToken(string $accessToken): void
+    {
+        $appId = (string) config('services.facebook.app_id');
+        $appSecret = (string) config('services.facebook.app_secret');
+
+        if ($appId === '' || $appSecret === '') {
+            throw new LoginFacebookException(
+                message: 'Facebook configuration is missing.',
+                errors: [
+                    'facebook' => ['Facebook configuration is missing.'],
+                ],
+                status: 500
+            );
+        }
+
+        $response = Http::timeout(10)
+            ->get('https://graph.facebook.com/debug_token', [
+                'input_token' => $accessToken,
+                'access_token' => $appId . '|' . $appSecret,
+            ]);
+
+        if (! $response->successful()) {
+            throw new LoginFacebookException(
+                message: 'Invalid Facebook token.',
+                errors: [
+                    'access_token' => ['Invalid Facebook token.'],
+                ],
+                status: 422
+            );
+        }
+
+        $data = $response->json('data', []);
+
+        if (! ($data['is_valid'] ?? false)) {
+            throw new LoginFacebookException(
+                message: 'Invalid Facebook token.',
+                errors: [
+                    'access_token' => ['Invalid Facebook token.'],
+                ],
+                status: 422
+            );
+        }
+
+        if ((string) ($data['app_id'] ?? '') !== $appId) {
+            throw new LoginFacebookException(
+                message: 'The Facebook token does not belong to this application.',
+                errors: [
+                    'access_token' => ['The Facebook token does not belong to this application.'],
+                ],
+                status: 422
+            );
+        }
+    }
+
+    protected function resolveOrCreateUser(array $profile): Utente
+    {
+        $facebookId = (string) $profile['id'];
+        $email = mb_strtolower(trim((string) $profile['email']));
+
+        [$nome, $cognome] = $this->extractNames((string) ($profile['name'] ?? ''), $email);
 
         return $this->resolveSocialIdentityService->resolve([
-            'provider' => 'apple',
-            'provider_user_id' => $appleSub,
+            'provider' => 'facebook',
+            'provider_user_id' => $facebookId,
             'email' => $email,
             'nome' => $nome,
             'cognome' => $cognome,
         ]);
     }
 
-    protected function resolveEmail(array $claims): ?string
+    protected function ensureFacebookLoginIsAllowed(Utente $user): void
     {
-        $email = trim((string) ($claims['email'] ?? ''));
-
-        return $email !== '' ? mb_strtolower($email) : null;
-    }
-
-    protected function ensureAppleLoginIsAllowed(Utente $user): void
-    {
-        if (! $user->hasRole('cliente')) {
-            throw new LoginAppleException(
-                message: 'Accesso con Apple non consentito per questo account.',
+        if (! in_array((int) $user->stato, [1, 3], true)) {
+            throw new LoginFacebookException(
+                message: 'Account is not allowed to sign in.',
                 errors: [
-                    'apple' => ['Accesso con Apple non consentito per questo account.'],
+                    'facebook' => ['Account is not allowed to sign in.'],
                 ],
                 status: 403
             );
         }
     }
 
-    protected function extractNames(array $data, string $fallbackEmail): array
+    protected function extractNames(string $fullName, string $fallbackEmail): array
     {
-        $givenName = trim((string) ($data['given_name'] ?? ''));
-        $familyName = trim((string) ($data['family_name'] ?? ''));
+        $fullName = trim($fullName);
 
-        if ($givenName !== '' || $familyName !== '') {
+        if ($fullName !== '' && str_contains($fullName, ' ')) {
+            $parts = preg_split('/\s+/', $fullName, 2);
+
             return [
-                $givenName !== '' ? $givenName : explode('@', $fallbackEmail)[0],
-                $familyName !== '' ? $familyName : '-',
+                trim((string) ($parts[0] ?? explode('@', $fallbackEmail)[0])),
+                trim((string) ($parts[1] ?? '-')),
             ];
         }
 
         return [
-            explode('@', $fallbackEmail)[0],
+            $fullName !== '' ? $fullName : explode('@', $fallbackEmail)[0],
             '-',
         ];
     }

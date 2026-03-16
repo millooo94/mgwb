@@ -17,9 +17,9 @@ class AppleIdentityService
 
             if (! $jwksResponse->successful()) {
                 throw new LoginAppleException(
-                    message: 'Impossibile verificare il token Apple.',
+                    message: 'Unable to verify Apple token.',
                     errors: [
-                        'identity_token' => ['Impossibile verificare il token Apple.'],
+                        'identity_token' => ['Unable to verify Apple token.'],
                     ],
                     status: 422
                 );
@@ -32,9 +32,9 @@ class AppleIdentityService
 
             if (($claims['iss'] ?? null) !== 'https://appleid.apple.com') {
                 throw new LoginAppleException(
-                    message: 'Issuer Apple non valido.',
+                    message: 'Invalid Apple issuer.',
                     errors: [
-                        'identity_token' => ['Issuer Apple non valido.'],
+                        'identity_token' => ['Invalid Apple issuer.'],
                     ],
                     status: 422
                 );
@@ -42,9 +42,9 @@ class AppleIdentityService
 
             if (($claims['aud'] ?? null) !== config('services.apple.client_id')) {
                 throw new LoginAppleException(
-                    message: 'Audience Apple non valida.',
+                    message: 'Invalid Apple audience.',
                     errors: [
-                        'identity_token' => ['Audience Apple non valida.'],
+                        'identity_token' => ['Invalid Apple audience.'],
                     ],
                     status: 422
                 );
@@ -52,9 +52,9 @@ class AppleIdentityService
 
             if (! empty($expectedNonce) && ($claims['nonce'] ?? null) !== $expectedNonce) {
                 throw new LoginAppleException(
-                    message: 'Nonce Apple non valido.',
+                    message: 'Invalid Apple nonce.',
                     errors: [
-                        'nonce' => ['Nonce Apple non valido.'],
+                        'nonce' => ['Invalid Apple nonce.'],
                     ],
                     status: 422
                 );
@@ -62,9 +62,9 @@ class AppleIdentityService
 
             if (empty($claims['sub'])) {
                 throw new LoginAppleException(
-                    message: 'Identificativo Apple non valido.',
+                    message: 'Invalid Apple identifier.',
                     errors: [
-                        'identity_token' => ['Identificativo Apple non valido.'],
+                        'identity_token' => ['Invalid Apple identifier.'],
                     ],
                     status: 422
                 );
@@ -75,9 +75,9 @@ class AppleIdentityService
             throw $e;
         } catch (Throwable $e) {
             throw new LoginAppleException(
-                message: 'Token Apple non valido.',
+                message: 'Invalid Apple token.',
                 errors: [
-                    'identity_token' => ['Token Apple non valido.'],
+                    'identity_token' => ['Invalid Apple token.'],
                 ],
                 status: 422
             );
@@ -90,9 +90,9 @@ class AppleIdentityService
 
         if ($clientId === '') {
             throw new LoginAppleException(
-                message: 'Configurazione Apple mancante.',
+                message: 'Apple configuration is missing.',
                 errors: [
-                    'apple' => ['Configurazione Apple mancante.'],
+                    'apple' => ['Apple configuration is missing.'],
                 ],
                 status: 500
             );
@@ -109,9 +109,9 @@ class AppleIdentityService
 
         if (! $response->successful()) {
             throw new LoginAppleException(
-                message: 'Codice Apple non valido o scaduto.',
+                message: 'Invalid or expired Apple authorization code.',
                 errors: [
-                    'authorization_code' => ['Codice Apple non valido o scaduto.'],
+                    'authorization_code' => ['Invalid or expired Apple authorization code.'],
                 ],
                 status: 422
             );
@@ -127,9 +127,9 @@ class AppleIdentityService
 
         if ($teamId === '' || $clientId === '' || $keyId === '' || $privateKey === '') {
             throw new LoginAppleException(
-                message: 'Configurazione Apple incompleta.',
+                message: 'Apple configuration is incomplete.',
                 errors: [
-                    'apple' => ['Configurazione Apple incompleta.'],
+                    'apple' => ['Apple configuration is incomplete.'],
                 ],
                 status: 500
             );

@@ -6,15 +6,15 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('profili_cliente', function (Blueprint $table) {
             $table->id();
 
-            $table->foreignId('utente_id')->constrained('utenti')->cascadeOnDelete();
+            $table->foreignId('utente_id')
+                ->unique()
+                ->constrained('utenti')
+                ->cascadeOnDelete();
 
             $table->string('codice_cliente', 255)->nullable();
 
@@ -69,14 +69,10 @@ return new class extends Migration
 
             $table->tinyInteger('blocco_completamento_web')->default(0);
 
-
             $table->timestamps();
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('profili_cliente');

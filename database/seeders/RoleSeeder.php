@@ -3,30 +3,34 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
-use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 
 class RoleSeeder extends Seeder
 {
-    /**
-     * Run the database seeds.
-     */
     public function run(): void
     {
-        $amministratore = Role::firstOrCreate(['name' => 'amministratore', 'guard_name' => 'api']);
-        $collaboratore  = Role::firstOrCreate(['name' => 'collaboratore',  'guard_name' => 'api']);
-        $cliente        = Role::firstOrCreate(['name' => 'cliente',        'guard_name' => 'api']);
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
 
-        $amministratore->syncPermissions(Permission::all());
+        $superadmin = Role::firstOrCreate(['name' => 'superadmin', 'guard_name' => 'api']);
+        $admin = Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'api']);
+        $staff = Role::firstOrCreate(['name' => 'staff', 'guard_name' => 'api']);
+        $customer = Role::firstOrCreate(['name' => 'customer', 'guard_name' => 'api']);
 
-        $collaboratore->syncPermissions([
-            'dashboard.accesso',
-            'ordini.gestisci',
-            'anagrafiche.gestisci',
-            'ticket.gestisci',
-            'messaggi.gestisci',
+        $allPermissions = Permission::all();
+
+        $superadmin->syncPermissions($allPermissions);
+        $admin->syncPermissions($allPermissions);
+
+        $staff->syncPermissions([
+            'backoffice.access',
+            'orders.manage',
+            'customers.manage',
+            'tickets.manage',
+            'messages.manage',
         ]);
 
-        $cliente->syncPermissions([]);
+        $customer->syncPermissions([]);
     }
 }

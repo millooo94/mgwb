@@ -32,8 +32,9 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
-            'admin' => \App\Http\Middleware\EnsureAdminAccess::class,
-            'cliente' => \App\Http\Middleware\EnsureClienteAccess::class,
+            'active' => \App\Http\Middleware\EnsureActiveUser::class,
+            'backoffice' => \App\Http\Middleware\EnsureBackofficeAccess::class,
+            'customer' => \App\Http\Middleware\EnsureCustomerAccess::class,
             'verified' => \App\Http\Middleware\EnsureEmailVerified::class,
             'active' => \App\Http\Middleware\EnsureActiveUser::class,
         ]);

@@ -2,183 +2,168 @@
 
 namespace App\Services\Auth;
 
-use App\Exceptions\LoginFacebookException;
-use App\Models\Utente;
+use App\Exceptions\LoginAppleException;
+use Firebase\JWT\JWK;
+use Firebase\JWT\JWT;
 use Illuminate\Support\Facades\Http;
+use Throwable;
 
-class LoginFacebookService
+class AppleIdentityService
 {
-    public function __construct(
-        protected AuthUserPayloadService $authUserPayloadService,
-        protected AccessTokenService $accessTokenService,
-        protected ResolveSocialIdentityService $resolveSocialIdentityService
-    ) {}
-
-    public function login(array $data): array
+    public function verifyIdentityToken(string $identityToken, ?string $expectedNonce = null): array
     {
-        $profile = $this->fetchFacebookProfile($data['access_token']);
+        try {
+            $jwksResponse = Http::timeout(10)->get('https://appleid.apple.com/auth/keys');
 
-        $user = $this->resolveOrCreateUser($profile);
+            if (! $jwksResponse->successful()) {
+                throw new LoginAppleException(
+                    message: 'Impossibile verificare il token Apple.',
+                    errors: [
+                        'identity_token' => ['Impossibile verificare il token Apple.'],
+                    ],
+                    status: 422
+                );
+            }
 
-        $this->ensureFacebookLoginIsAllowed($user);
+            $keys = JWK::parseKeySet($jwksResponse->json(), 'ES256');
 
-        $token = $this->accessTokenService->create(
-            user: $user,
-            name: 'access',
-            deleteExistingTokens: false,
-            abilities: ['*']
-        );
+            $decoded = JWT::decode($identityToken, $keys);
+            $claims = json_decode(json_encode($decoded), true);
 
-        return array_merge(
-            ['token' => $token],
-            $this->authUserPayloadService->build($user)
-        );
+            if (($claims['iss'] ?? null) !== 'https://appleid.apple.com') {
+                throw new LoginAppleException(
+                    message: 'Issuer Apple non valido.',
+                    errors: [
+                        'identity_token' => ['Issuer Apple non valido.'],
+                    ],
+                    status: 422
+                );
+            }
+
+            if (($claims['aud'] ?? null) !== config('services.apple.client_id')) {
+                throw new LoginAppleException(
+                    message: 'Audience Apple non valida.',
+                    errors: [
+                        'identity_token' => ['Audience Apple non valida.'],
+                    ],
+                    status: 422
+                );
+            }
+
+            if (! empty($expectedNonce) && ($claims['nonce'] ?? null) !== $expectedNonce) {
+                throw new LoginAppleException(
+                    message: 'Nonce Apple non valido.',
+                    errors: [
+                        'nonce' => ['Nonce Apple non valido.'],
+                    ],
+                    status: 422
+                );
+            }
+
+            if (empty($claims['sub'])) {
+                throw new LoginAppleException(
+                    message: 'Identificativo Apple non valido.',
+                    errors: [
+                        'identity_token' => ['Identificativo Apple non valido.'],
+                    ],
+                    status: 422
+                );
+            }
+
+            return $claims;
+        } catch (LoginAppleException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            throw new LoginAppleException(
+                message: 'Token Apple non valido.',
+                errors: [
+                    'identity_token' => ['Token Apple non valido.'],
+                ],
+                status: 422
+            );
+        }
     }
 
-    protected function fetchFacebookProfile(string $accessToken): array
+    public function validateAuthorizationCode(string $authorizationCode): void
     {
-        $this->debugAccessToken($accessToken);
+        $clientId = (string) config('services.apple.client_id');
 
-        $response = Http::timeout(10)
-            ->get('https://graph.facebook.com/me', [
-                'fields' => 'id,name,email',
-                'access_token' => $accessToken,
-            ]);
-
-        if (! $response->successful()) {
-            throw new LoginFacebookException(
-                message: 'Impossibile recuperare il profilo Facebook.',
+        if ($clientId === '') {
+            throw new LoginAppleException(
+                message: 'Configurazione Apple mancante.',
                 errors: [
-                    'access_token' => ['Impossibile recuperare il profilo Facebook.'],
-                ],
-                status: 422
-            );
-        }
-
-        $profile = $response->json();
-
-        if (empty($profile['id'])) {
-            throw new LoginFacebookException(
-                message: 'Profilo Facebook non valido.',
-                errors: [
-                    'access_token' => ['Profilo Facebook non valido.'],
-                ],
-                status: 422
-            );
-        }
-
-        if (empty($profile['email'])) {
-            throw new LoginFacebookException(
-                message: 'Email Facebook non disponibile. Verifica di aver richiesto il permesso email.',
-                errors: [
-                    'email' => ['Email Facebook non disponibile. Verifica di aver richiesto il permesso email.'],
-                ],
-                status: 422
-            );
-        }
-
-        return $profile;
-    }
-
-    protected function debugAccessToken(string $accessToken): void
-    {
-        $appId = (string) config('services.facebook.app_id');
-        $appSecret = (string) config('services.facebook.app_secret');
-
-        if ($appId === '' || $appSecret === '') {
-            throw new LoginFacebookException(
-                message: 'Configurazione Facebook mancante.',
-                errors: [
-                    'facebook' => ['Configurazione Facebook mancante.'],
+                    'apple' => ['Configurazione Apple mancante.'],
                 ],
                 status: 500
             );
         }
 
-        $response = Http::timeout(10)
-            ->get('https://graph.facebook.com/debug_token', [
-                'input_token' => $accessToken,
-                'access_token' => $appId . '|' . $appSecret,
+        $response = Http::asForm()
+            ->timeout(10)
+            ->post('https://appleid.apple.com/auth/token', [
+                'client_id' => $clientId,
+                'client_secret' => $this->generateClientSecret(),
+                'code' => $authorizationCode,
+                'grant_type' => 'authorization_code',
             ]);
 
         if (! $response->successful()) {
-            throw new LoginFacebookException(
-                message: 'Token Facebook non valido.',
+            throw new LoginAppleException(
+                message: 'Codice Apple non valido o scaduto.',
                 errors: [
-                    'access_token' => ['Token Facebook non valido.'],
-                ],
-                status: 422
-            );
-        }
-
-        $data = $response->json('data', []);
-
-        if (! ($data['is_valid'] ?? false)) {
-            throw new LoginFacebookException(
-                message: 'Token Facebook non valido.',
-                errors: [
-                    'access_token' => ['Token Facebook non valido.'],
-                ],
-                status: 422
-            );
-        }
-
-        if ((string) ($data['app_id'] ?? '') !== $appId) {
-            throw new LoginFacebookException(
-                message: 'Il token Facebook non appartiene a questa applicazione.',
-                errors: [
-                    'access_token' => ['Il token Facebook non appartiene a questa applicazione.'],
+                    'authorization_code' => ['Codice Apple non valido o scaduto.'],
                 ],
                 status: 422
             );
         }
     }
 
-    protected function resolveOrCreateUser(array $profile): Utente
+    protected function generateClientSecret(): string
     {
-        $facebookId = (string) $profile['id'];
-        $email = mb_strtolower(trim((string) $profile['email']));
+        $teamId = (string) config('services.apple.team_id');
+        $clientId = (string) config('services.apple.client_id');
+        $keyId = (string) config('services.apple.key_id');
+        $privateKey = $this->resolvePrivateKey();
 
-        [$nome, $cognome] = $this->extractNames((string) ($profile['name'] ?? ''), $email);
-
-        return $this->resolveSocialIdentityService->resolve([
-            'provider' => 'facebook',
-            'provider_user_id' => $facebookId,
-            'email' => $email,
-            'nome' => $nome,
-            'cognome' => $cognome,
-        ]);
-    }
-
-    protected function ensureFacebookLoginIsAllowed(Utente $user): void
-    {
-        if (! $user->hasRole('cliente')) {
-            throw new LoginFacebookException(
-                message: 'Accesso con Facebook non consentito per questo account.',
+        if ($teamId === '' || $clientId === '' || $keyId === '' || $privateKey === '') {
+            throw new LoginAppleException(
+                message: 'Configurazione Apple incompleta.',
                 errors: [
-                    'facebook' => ['Accesso con Facebook non consentito per questo account.'],
+                    'apple' => ['Configurazione Apple incompleta.'],
                 ],
-                status: 403
+                status: 500
             );
         }
+
+        $now = time();
+
+        return JWT::encode(
+            [
+                'iss' => $teamId,
+                'iat' => $now,
+                'exp' => $now + 300,
+                'aud' => 'https://appleid.apple.com',
+                'sub' => $clientId,
+            ],
+            $privateKey,
+            'ES256',
+            $keyId
+        );
     }
 
-    protected function extractNames(string $fullName, string $fallbackEmail): array
+    protected function resolvePrivateKey(): string
     {
-        $fullName = trim($fullName);
+        $rawKey = (string) config('services.apple.private_key');
+        $keyPath = (string) config('services.apple.private_key_path');
 
-        if ($fullName !== '' && str_contains($fullName, ' ')) {
-            $parts = preg_split('/\s+/', $fullName, 2);
-
-            return [
-                trim((string) ($parts[0] ?? explode('@', $fallbackEmail)[0])),
-                trim((string) ($parts[1] ?? '-')),
-            ];
+        if ($rawKey !== '') {
+            return str_replace('\n', "\n", $rawKey);
         }
 
-        return [
-            $fullName !== '' ? $fullName : explode('@', $fallbackEmail)[0],
-            '-',
-        ];
+        if ($keyPath !== '' && is_file($keyPath)) {
+            return (string) file_get_contents($keyPath);
+        }
+
+        return '';
     }
 }

@@ -41,9 +41,9 @@ class LoginGoogleService
 
         if (! $clientId) {
             throw new LoginGoogleException(
-                message: 'Configurazione Google mancante.',
+                message: 'Google configuration is missing.',
                 errors: [
-                    'google' => ['Configurazione Google mancante.'],
+                    'google' => ['Google configuration is missing.'],
                 ],
                 status: 500
             );
@@ -57,9 +57,9 @@ class LoginGoogleService
 
         if (! $payload || ! is_array($payload)) {
             throw new LoginGoogleException(
-                message: 'Token Google non valido.',
+                message: 'Invalid Google token.',
                 errors: [
-                    'id_token' => ['Token Google non valido.'],
+                    'id_token' => ['Invalid Google token.'],
                 ],
                 status: 422
             );
@@ -91,9 +91,9 @@ class LoginGoogleService
 
         if ($email === '' || ! $emailVerified) {
             throw new LoginGoogleException(
-                message: 'Account Google privo di email verificata.',
+                message: 'Google account has no verified email.',
                 errors: [
-                    'email' => ['Account Google privo di email verificata.'],
+                    'email' => ['Google account has no verified email.'],
                 ],
                 status: 422
             );
@@ -108,9 +108,9 @@ class LoginGoogleService
 
         if ($googleSub === '') {
             throw new LoginGoogleException(
-                message: 'Identificativo Google non valido.',
+                message: 'Invalid Google identifier.',
                 errors: [
-                    'google' => ['Identificativo Google non valido.'],
+                    'google' => ['Invalid Google identifier.'],
                 ],
                 status: 422
             );
@@ -121,11 +121,11 @@ class LoginGoogleService
 
     protected function ensureGoogleLoginIsAllowed(Utente $user): void
     {
-        if (! $user->hasRole('cliente')) {
+        if (! in_array((int) $user->stato, [1, 3], true)) {
             throw new LoginGoogleException(
-                message: 'Accesso con Google non consentito per questo account.',
+                message: 'Account is not allowed to sign in.',
                 errors: [
-                    'google' => ['Accesso con Google non consentito per questo account.'],
+                    'google' => ['Account is not allowed to sign in.'],
                 ],
                 status: 403
             );

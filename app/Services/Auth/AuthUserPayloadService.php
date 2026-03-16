@@ -13,7 +13,7 @@ class AuthUserPayloadService
         $contexts = $this->resolveAvailableContexts($user);
 
         return [
-            'utente' => $this->buildUserPayload($user, $contexts),
+            'user' => $this->buildUserPayload($user, $contexts),
             'post_login' => $this->buildPostLoginPayload($user, $contexts),
         ];
     }
@@ -22,29 +22,29 @@ class AuthUserPayloadService
     {
         $contexts = [];
 
-        if ($this->canAccessAdminContext($user)) {
-            $contexts[] = 'admin';
+        if ($this->canAccessBackofficeContext($user)) {
+            $contexts[] = 'backoffice';
         }
 
-        if ($this->canAccessClienteContext($user)) {
-            $contexts[] = 'cliente';
+        if ($this->canAccessCustomerContext($user)) {
+            $contexts[] = 'customer';
         }
 
         return $contexts;
     }
 
-    protected function canAccessAdminContext(Utente $user): bool
+    protected function canAccessBackofficeContext(Utente $user): bool
     {
-        if (! $user->hasAnyRole(['amministratore', 'collaboratore'])) {
+        if (! $user->hasAnyRole(['superadmin', 'admin', 'staff'])) {
             return false;
         }
 
         return in_array((int) $user->stato, [1, 3], true);
     }
 
-    protected function canAccessClienteContext(Utente $user): bool
+    protected function canAccessCustomerContext(Utente $user): bool
     {
-        if (! $user->hasRole('cliente')) {
+        if (! $user->hasRole('customer')) {
             return false;
         }
 
@@ -70,21 +70,21 @@ class AuthUserPayloadService
             'cognome' => $user->cognome,
             'email' => $user->email,
             'phone' => $user->phone,
-            'stato' => (int) $user->stato,
-            'email_verificata' => $user->hasVerifiedEmail(),
-            'phone_verificato' => $user->phone_verified_at !== null,
-            'ruoli' => $roles,
-            'permessi' => $permissions,
-            'contesti_disponibili' => $contexts,
+            'status' => (int) $user->stato,
+            'email_verified' => $user->hasVerifiedEmail(),
+            'phone_verified' => $user->phone_verified_at !== null,
+            'roles' => $roles,
+            'permissions' => $permissions,
+            'available_contexts' => $contexts,
             'capabilities' => [
-                'access_admin' => in_array('admin', $contexts, true),
-                'access_cliente' => in_array('cliente', $contexts, true),
+                'access_backoffice' => in_array('backoffice', $contexts, true),
+                'access_customer' => in_array('customer', $contexts, true),
             ],
-            'profilo_cliente' => $this->buildProfiloClientePayload($user),
+            'customer_profile' => $this->buildCustomerProfilePayload($user),
         ];
     }
 
-    protected function buildProfiloClientePayload(Utente $user): ?array
+    protected function buildCustomerProfilePayload(Utente $user): ?array
     {
         if (! $user->profiloCliente) {
             return null;
@@ -92,17 +92,19 @@ class AuthUserPayloadService
 
         return [
             'id' => $user->profiloCliente->id,
-            'utente_id' => $user->profiloCliente->utente_id,
+            'user_id' => $user->profiloCliente->utente_id,
             'nome' => $user->profiloCliente->nome,
             'email' => $user->profiloCliente->email,
-            'id_programma' => $user->profiloCliente->id_programma,
-            'data_registrazione' => $user->profiloCliente->data_registrazione,
+            'program_id' => $user->profiloCliente->id_programma,
+            'registered_at' => $user->profiloCliente->data_registrazione,
         ];
     }
 
     protected function buildPostLoginPayload(Utente $user, array $contexts): array
     {
-        if ($user->hasRole('cliente') && ! $user->hasVerifiedEmail()) {
+        $hasBackoffice = in_array('backoffice', $contexts, true);
+
+        if (! $hasBackoffice && $user->hasRole('customer') && ! $user->hasVerifiedEmail()) {
             return [
                 'type' => 'verify_email',
                 'default_context' => null,

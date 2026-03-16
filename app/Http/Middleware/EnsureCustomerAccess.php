@@ -7,22 +7,22 @@ use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-class EnsureClienteAccess
+class EnsureCustomerAccess
 {
     public function handle(Request $request, Closure $next): Response
     {
         $user = $request->user('sanctum');
 
         if (! $user) {
-            return ApiResponse::error('Utente non autenticato.', 401);
+            return ApiResponse::error('User is not authenticated.', 401);
         }
 
-        if (! $user->hasRole('cliente')) {
-            return ApiResponse::error('Accesso negato all’area cliente.', 403);
+        if (! $user->hasRole('customer')) {
+            return ApiResponse::error('Access denied to the customer area.', 403);
         }
 
         if ((int) $user->stato !== 1) {
-            return ApiResponse::error('Account cliente disattivato.', 403);
+            return ApiResponse::error('Customer account is not active.', 403);
         }
 
         return $next($request);

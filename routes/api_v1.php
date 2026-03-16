@@ -22,6 +22,8 @@ use App\Http\Controllers\Api\V1\Auth\ResetPasswordController;
 use App\Http\Controllers\Api\V1\Auth\SetPasswordController;
 use App\Http\Controllers\Api\V1\Auth\UpdateProfileController;
 use App\Http\Controllers\Api\V1\Auth\VerifyEmailController;
+use App\Http\Controllers\Api\V1\Backoffice\Users\StoreBackofficeUserController;
+use App\Http\Controllers\Api\V1\Backoffice\Users\UpdateUserRolesController;
 use App\Support\ApiResponse;
 use Illuminate\Support\Facades\Route;
 
@@ -98,15 +100,18 @@ Route::prefix('v1')->group(function () {
             Route::post('/phone-change/confirm', ChangePhoneConfirmController::class);
         });
 
-    Route::prefix('admin')
-        ->middleware(['auth:sanctum', 'active', 'admin'])
+    Route::prefix('backoffice')
+        ->middleware(['auth:sanctum', 'active', 'backoffice'])
         ->group(function () {
-            Route::get('/ping', fn() => ApiResponse::success(['pong' => true], 'admin ok'));
+            Route::get('/ping', fn() => ApiResponse::success(['pong' => true], 'backoffice ok'));
+
+            Route::post('/users', StoreBackofficeUserController::class);
+            Route::patch('/users/{utente}/roles', UpdateUserRolesController::class);
         });
 
-    Route::prefix('cliente')
-        ->middleware(['auth:sanctum', 'active', 'verified', 'cliente'])
+    Route::prefix('customer')
+        ->middleware(['auth:sanctum', 'active', 'verified', 'customer'])
         ->group(function () {
-            Route::get('/ping', fn() => ApiResponse::success(['pong' => true], 'cliente ok'));
+            Route::get('/ping', fn() => ApiResponse::success(['pong' => true], 'customer ok'));
         });
 });

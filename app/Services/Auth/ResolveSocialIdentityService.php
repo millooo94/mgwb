@@ -6,147 +6,175 @@ use App\Models\AuthIdentity;
 use App\Models\ProfiloCliente;
 use App\Models\Utente;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 
 class ResolveSocialIdentityService
 {
     public function resolve(array $data): Utente
     {
-        $provider = (string) $data['provider'];
-        $providerUserId = (string) $data['provider_user_id'];
-        $providerEmail = $this->normalizeEmail($data['email'] ?? null);
+        return DB::transaction(function () use ($data): Utente {
+            $provider = (string) $data['provider'];
+            $providerUserId = (string) $data['provider_user_id'];
+            $email = mb_strtolower(trim((string) $data['email']));
+            $nome = trim((string) ($data['nome'] ?? ''));
+            $cognome = trim((string) ($data['cognome'] ?? ''));
 
-        $identity = AuthIdentity::query()
-            ->with('utente')
-            ->where('provider', $provider)
-            ->where('provider_user_id', $providerUserId)
-            ->first();
+            $shouldAttachCustomerRole = array_key_exists('should_attach_customer_role', $data)
+                ? (is_null($data['should_attach_customer_role']) ? null : (bool) $data['should_attach_customer_role'])
+                : null;
 
-        if ($identity && $identity->utente) {
-            $this->syncExistingIdentity($identity, $providerEmail);
+            $identity = AuthIdentity::query()
+                ->where('provider', $provider)
+                ->where('provider_user_id', $providerUserId)
+                ->first();
 
-            return $identity->utente->fresh();
-        }
+            $wasNewUser = false;
 
-        return DB::transaction(function () use ($provider, $providerUserId, $providerEmail, $data): Utente {
-            $user = null;
-
-            if ($providerEmail) {
-                $user = Utente::query()
-                    ->whereRaw('LOWER(email) = ?', [$providerEmail])
-                    ->first();
-            }
-
-            if (! $user) {
-                [$nome, $cognome] = $this->resolveNames($data, $providerEmail);
-
-                $user = Utente::create([
-                    'nome' => $nome,
-                    'cognome' => $cognome,
-                    'email' => $providerEmail,
-                    'password' => Hash::make(Str::random(40)),
-                    'stato' => 1,
-                    'email_verified_at' => $providerEmail ? now() : null,
-                ]);
-
-                $user->assignRole('cliente');
-
-                ProfiloCliente::create([
-                    'utente_id' => $user->id,
-                    'id_programma' => 1,
-                    'email' => $user->email,
-                    'nome' => trim($nome . ' ' . $cognome),
-                    'data_registrazione' => now(),
-                ]);
+            if ($identity) {
+                $user = $identity->utente;
             } else {
-                $this->syncExistingUser($user, $providerEmail);
+                $user = Utente::query()
+                    ->where('email', $email)
+                    ->first();
+
+                if (! $user) {
+                    $user = Utente::create([
+                        'nome' => $nome !== '' ? $nome : explode('@', $email)[0],
+                        'cognome' => $cognome !== '' ? $cognome : '-',
+                        'email' => $email,
+                        'password' => null,
+                        'stato' => 1,
+                        'email_verified_at' => now(),
+                    ]);
+
+                    $wasNewUser = true;
+                }
             }
 
-            AuthIdentity::firstOrCreate(
+            $this->refreshUserBaseData(
+                user: $user,
+                providerEmail: $email,
+                nome: $nome,
+                cognome: $cognome
+            );
+
+            AuthIdentity::updateOrCreate(
                 [
                     'provider' => $provider,
                     'provider_user_id' => $providerUserId,
                 ],
                 [
                     'utente_id' => $user->id,
-                    'provider_email' => $providerEmail,
+                    'provider_email' => $email,
                 ]
             );
 
-            return $user->fresh();
+            $this->ensureEmailIdentity($user);
+
+            if ($this->shouldEnsureCustomerBaseline($user, $wasNewUser, $shouldAttachCustomerRole)) {
+                $this->ensureCustomerBaseline($user);
+            }
+
+            return $user->fresh(['profiloCliente']);
         });
     }
 
-    protected function syncExistingIdentity(AuthIdentity $identity, ?string $providerEmail): void
-    {
-        $dirtyIdentity = false;
-        $user = $identity->utente;
-        $dirtyUser = false;
+    protected function refreshUserBaseData(
+        Utente $user,
+        string $providerEmail,
+        string $nome,
+        string $cognome
+    ): void {
+        $updates = [];
 
-        if ($providerEmail && ! $identity->provider_email) {
-            $identity->provider_email = $providerEmail;
-            $dirtyIdentity = true;
+        if (
+            mb_strtolower(trim((string) $user->email)) === $providerEmail
+            && ! $user->email_verified_at
+        ) {
+            $updates['email_verified_at'] = now();
         }
 
-        if ($providerEmail && $user && ! $user->email_verified_at) {
-            $user->email_verified_at = now();
-            $dirtyUser = true;
+        if ($nome !== '' && $this->isMissingPersonField($user->nome)) {
+            $updates['nome'] = $nome;
         }
 
-        if ($dirtyIdentity) {
-            $identity->save();
+        if ($cognome !== '' && $this->isMissingPersonField($user->cognome)) {
+            $updates['cognome'] = $cognome;
         }
 
-        if ($dirtyUser) {
-            $user->save();
-        }
-    }
-
-    protected function syncExistingUser(Utente $user, ?string $providerEmail): void
-    {
-        $dirty = false;
-
-        if ($providerEmail && ! $user->email_verified_at) {
-            $user->email_verified_at = now();
-            $dirty = true;
-        }
-
-        if ($dirty) {
-            $user->save();
+        if (! empty($updates)) {
+            $user->update($updates);
         }
     }
 
-    protected function resolveNames(array $data, ?string $email): array
+    protected function isMissingPersonField(?string $value): bool
     {
-        $fallback = $this->fallbackNameFromEmail($email);
+        $value = trim((string) $value);
 
-        $nome = trim((string) ($data['nome'] ?? ''));
-        $cognome = trim((string) ($data['cognome'] ?? ''));
-
-        return [
-            $nome !== '' ? $nome : $fallback,
-            $cognome !== '' ? $cognome : '-',
-        ];
+        return $value === '' || $value === '-';
     }
 
-    protected function fallbackNameFromEmail(?string $email): string
+    protected function ensureEmailIdentity(Utente $user): void
     {
-        if (! $email) {
-            return 'Utente';
-        }
-
-        return explode('@', $email)[0] ?: 'Utente';
+        AuthIdentity::firstOrCreate(
+            [
+                'provider' => 'email',
+                'provider_user_id' => mb_strtolower($user->email),
+            ],
+            [
+                'utente_id' => $user->id,
+                'provider_email' => mb_strtolower($user->email),
+            ]
+        );
     }
 
-    protected function normalizeEmail(mixed $email): ?string
-    {
-        if (! is_string($email)) {
-            return null;
+    protected function shouldEnsureCustomerBaseline(
+        Utente $user,
+        bool $wasNewUser,
+        ?bool $shouldAttachCustomerRole
+    ): bool {
+        if ($shouldAttachCustomerRole === true) {
+            return true;
         }
 
-        $email = mb_strtolower(trim($email));
+        if ($shouldAttachCustomerRole === false) {
+            return false;
+        }
 
-        return $email !== '' ? $email : null;
+        if ($wasNewUser) {
+            return true;
+        }
+
+        if ($user->hasRole('customer')) {
+            return true;
+        }
+
+        if ($user->profiloCliente()->exists()) {
+            return true;
+        }
+
+        if ($user->hasAnyRole(['superadmin', 'admin', 'staff'])) {
+            return false;
+        }
+
+        return $user->roles()->doesntExist();
+    }
+
+    protected function ensureCustomerBaseline(Utente $user): void
+    {
+        if (! $user->hasRole('customer')) {
+            $user->assignRole('customer');
+        }
+
+        ProfiloCliente::firstOrCreate(
+            [
+                'utente_id' => $user->id,
+            ],
+            [
+                'id_programma' => 1,
+                'email' => $user->email,
+                'nome' => $user->nome ?: $user->email,
+                'data_registrazione' => now(),
+            ]
+        );
     }
 }

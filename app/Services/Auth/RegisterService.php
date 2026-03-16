@@ -22,7 +22,7 @@ class RegisterService
 
                 $this->assignDefaultRole($user);
 
-                $this->createClienteProfile($user);
+                $this->createCustomerProfile($user);
 
                 $this->sendVerificationEmail($user);
 
@@ -68,10 +68,10 @@ class RegisterService
 
     protected function assignDefaultRole(Utente $user): void
     {
-        $user->assignRole('cliente');
+        $user->assignRole('customer');
     }
 
-    protected function createClienteProfile(Utente $user): void
+    protected function createCustomerProfile(Utente $user): void
     {
         ProfiloCliente::create([
             'utente_id' => $user->id,
